@@ -11,12 +11,12 @@ import (
 )
 
 type DashboardData struct {
-	InParkCount      int            `json:"in_park_count"`
-	MaxCapacity      int            `json:"max_capacity"`
-	TodayCheckIn     int            `json:"today_check_in"`
-	TodayCheckOut    int            `json:"today_check_out"`
-	TodaySold        int            `json:"today_sold"`
-	SlotInfo         []SlotInfoItem `json:"slot_info"`
+	InParkCount   int            `json:"in_park_count"`
+	MaxCapacity   int            `json:"max_capacity"`
+	TodayCheckIn  int            `json:"today_check_in"`
+	TodayCheckOut int            `json:"today_check_out"`
+	TodaySold     int            `json:"today_sold"`
+	SlotInfo      []SlotInfoItem `json:"slot_info"`
 }
 
 type SlotInfoItem struct {
@@ -28,7 +28,7 @@ type SlotInfoItem struct {
 }
 
 func GetDashboard(c *gin.Context) {
-	today := time.Now().Truncate(24 * time.Hour)
+	today := config.DateKey(time.Now())
 
 	var dailyCapacity models.DailyCapacity
 	var dailyExists = true
@@ -43,7 +43,7 @@ func GetDashboard(c *gin.Context) {
 		checkedInCount = dailyCapacity.CheckedInCount
 	}
 
-	checkedOutCount := getTodayCheckedOutCountDB(dailyCapacity)
+	checkedOutCount := getTodayCheckedOutCountDB(today)
 	inParkCount := checkedInCount - checkedOutCount
 	if inParkCount < 0 {
 		inParkCount = 0
@@ -57,10 +57,12 @@ func GetDashboard(c *gin.Context) {
 	slotInfo := make([]SlotInfoItem, 0)
 	for _, slot := range config.TimeSlots {
 		var slotCapacity models.SlotCapacity
+		maxCapacity := config.DefaultSlotCapacity
 		remaining := config.DefaultSlotCapacity
 		sold := 0
 		err := database.DB.Where("date = ? AND time_slot_id = ?", today, slot.ID).First(&slotCapacity).Error
 		if err == nil {
+			maxCapacity = slotCapacity.MaxCapacity
 			sold = slotCapacity.SoldCount
 			remaining = slotCapacity.MaxCapacity - slotCapacity.SoldCount
 			if remaining < 0 {
@@ -71,7 +73,7 @@ func GetDashboard(c *gin.Context) {
 		slotInfo = append(slotInfo, SlotInfoItem{
 			SlotID:      slot.ID,
 			SlotName:    slot.Name,
-			MaxCapacity: config.DefaultSlotCapacity,
+			MaxCapacity: maxCapacity,
 			SoldCount:   sold,
 			Remaining:   remaining,
 		})
@@ -98,23 +100,13 @@ type GateStatsItem struct {
 }
 
 func GetGateStats(c *gin.Context) {
-	startDateStr := c.Query("start_date")
-	endDateStr := c.Query("end_date")
-
-	var startTime, endTime time.Time
-	today := time.Now().Truncate(24 * time.Hour)
-
-	if startDateStr == "" {
-		startTime = today
-	} else {
-		startTime, _ = time.Parse("2006-01-02", startDateStr)
+	today := config.DateKey(time.Now())
+	startDate, endDate, ok := parseDateRange(c, today, today)
+	if !ok {
+		return
 	}
-	if endDateStr == "" {
-		endTime = today.Add(24 * time.Hour)
-	} else {
-		endTime, _ = time.Parse("2006-01-02", endDateStr)
-		endTime = endTime.Add(24 * time.Hour)
-	}
+	startTime, _ := config.DayRange(startDate)
+	_, endTime := config.DayRange(endDate.AddDate(0, 0, -1))
 
 	var records []models.CheckRecord
 	database.DB.Where("check_time >= ? AND check_time < ?", startTime, endTime).Find(&records)
@@ -150,15 +142,17 @@ type HourlyStatsItem struct {
 
 func GetHourlyStats(c *gin.Context) {
 	dateStr := c.Query("date")
-	var date time.Time
-	if dateStr == "" {
-		date = time.Now().Truncate(24 * time.Hour)
-	} else {
-		date, _ = time.Parse("2006-01-02", dateStr)
+	date := config.DateKey(time.Now())
+	if dateStr != "" {
+		parsed, err := config.ParseDate(dateStr)
+		if err != nil {
+			writeDateError(c, "日期格式错误，请使用 YYYY-MM-DD")
+			return
+		}
+		date = parsed
 	}
 
-	startTime := date
-	endTime := date.Add(24 * time.Hour)
+	startTime, endTime := config.DayRange(date)
 
 	var records []models.CheckRecord
 	database.DB.Where("check_type = ? AND check_time >= ? AND check_time < ?",
@@ -169,7 +163,7 @@ func GetHourlyStats(c *gin.Context) {
 		hourMap[i] = 0
 	}
 	for _, r := range records {
-		hour := r.CheckTime.Hour()
+		hour := r.CheckTime.In(config.BusinessLocation).Hour()
 		hourMap[hour]++
 	}
 
@@ -185,28 +179,17 @@ func GetHourlyStats(c *gin.Context) {
 }
 
 type DailyStatsItem struct {
-	Date        string  `json:"date"`
-	CheckInCount int   `json:"check_in_count"`
-	SoldCount   int     `json:"sold_count"`
+	Date         string  `json:"date"`
+	CheckInCount int     `json:"check_in_count"`
+	SoldCount    int     `json:"sold_count"`
 	TotalRevenue float64 `json:"total_revenue"`
 }
 
 func GetDailyStats(c *gin.Context) {
-	startDateStr := c.Query("start_date")
-	endDateStr := c.Query("end_date")
-
-	var startTime, endTime time.Time
-
-	if startDateStr == "" {
-		startTime = time.Now().AddDate(0, 0, -29).Truncate(24 * time.Hour)
-	} else {
-		startTime, _ = time.Parse("2006-01-02", startDateStr)
-	}
-	if endDateStr == "" {
-		endTime = time.Now().Truncate(24 * time.Hour).Add(24 * time.Hour)
-	} else {
-		endTime, _ = time.Parse("2006-01-02", endDateStr)
-		endTime = endTime.Add(24 * time.Hour)
+	today := config.DateKey(time.Now())
+	startTime, endTime, ok := parseDateRange(c, today.AddDate(0, 0, -29), today)
+	if !ok {
+		return
 	}
 
 	var dailyCapacities []models.DailyCapacity
@@ -216,13 +199,13 @@ func GetDailyStats(c *gin.Context) {
 	capMap := make(map[string]*models.DailyCapacity)
 	for i := range dailyCapacities {
 		d := dailyCapacities[i]
-		capMap[d.Date.Format("2006-01-02")] = &d
+		capMap[d.Date.In(time.UTC).Format(config.DateLayout)] = &d
 	}
 
 	type TicketSum struct {
-		VisitDate time.Time
+		VisitDate    time.Time
 		TotalRevenue float64
-		SoldCount int
+		SoldCount    int
 	}
 	var ticketSums []TicketSum
 	database.DB.Model(&models.Ticket{}).
@@ -235,14 +218,14 @@ func GetDailyStats(c *gin.Context) {
 	revenueMap := make(map[string]float64)
 	soldMap := make(map[string]int)
 	for _, ts := range ticketSums {
-		key := ts.VisitDate.Format("2006-01-02")
+		key := ts.VisitDate.In(time.UTC).Format(config.DateLayout)
 		revenueMap[key] = ts.TotalRevenue
 		soldMap[key] = ts.SoldCount
 	}
 
 	result := make([]DailyStatsItem, 0)
 	for d := startTime; d.Before(endTime); d = d.AddDate(0, 0, 1) {
-		key := d.Format("2006-01-02")
+		key := d.Format(config.DateLayout)
 		item := DailyStatsItem{Date: key}
 		if cap, ok := capMap[key]; ok {
 			item.CheckInCount = cap.CheckedInCount
@@ -260,35 +243,24 @@ func GetDailyStats(c *gin.Context) {
 }
 
 type TicketTypeRevenueItem struct {
-	TicketTypeID uint   `json:"ticket_type_id"`
-	TicketTypeName string `json:"ticket_type_name"`
-	Count        int    `json:"count"`
-	Revenue      float64 `json:"revenue"`
+	TicketTypeID   uint    `json:"ticket_type_id"`
+	TicketTypeName string  `json:"ticket_type_name"`
+	Count          int     `json:"count"`
+	Revenue        float64 `json:"revenue"`
 }
 
 func GetTicketTypeStats(c *gin.Context) {
-	startDateStr := c.Query("start_date")
-	endDateStr := c.Query("end_date")
-
-	var startTime, endTime time.Time
-
-	if startDateStr == "" {
-		startTime = time.Now().AddDate(0, 0, -29).Truncate(24 * time.Hour)
-	} else {
-		startTime, _ = time.Parse("2006-01-02", startDateStr)
-	}
-	if endDateStr == "" {
-		endTime = time.Now().Truncate(24 * time.Hour).Add(24 * time.Hour)
-	} else {
-		endTime, _ = time.Parse("2006-01-02", endDateStr)
-		endTime = endTime.Add(24 * time.Hour)
+	today := config.DateKey(time.Now())
+	startTime, endTime, ok := parseDateRange(c, today.AddDate(0, 0, -29), today)
+	if !ok {
+		return
 	}
 
 	type Result struct {
-		TicketTypeID uint
+		TicketTypeID   uint
 		TicketTypeName string
-		Count        int64
-		Revenue      float64
+		Count          int64
+		Revenue        float64
 	}
 	var results []Result
 
@@ -321,21 +293,10 @@ type SlotHeatmapItem struct {
 }
 
 func GetSlotHeatmap(c *gin.Context) {
-	startDateStr := c.Query("start_date")
-	endDateStr := c.Query("end_date")
-
-	var startTime, endTime time.Time
-
-	if startDateStr == "" {
-		startTime = time.Now().AddDate(0, 0, -6).Truncate(24 * time.Hour)
-	} else {
-		startTime, _ = time.Parse("2006-01-02", startDateStr)
-	}
-	if endDateStr == "" {
-		endTime = time.Now().Truncate(24 * time.Hour).Add(24 * time.Hour)
-	} else {
-		endTime, _ = time.Parse("2006-01-02", endDateStr)
-		endTime = endTime.Add(24 * time.Hour)
+	today := config.DateKey(time.Now())
+	startTime, endTime, ok := parseDateRange(c, today.AddDate(0, 0, -6), today)
+	if !ok {
+		return
 	}
 
 	var slotCapacities []models.SlotCapacity
@@ -344,11 +305,11 @@ func GetSlotHeatmap(c *gin.Context) {
 
 	result := make([]SlotHeatmapItem, 0)
 	for d := startTime; d.Before(endTime); d = d.AddDate(0, 0, 1) {
-		dateStr := d.Format("2006-01-02")
+		dateStr := d.Format(config.DateLayout)
 		for _, slot := range config.TimeSlots {
 			count := 0
 			for _, sc := range slotCapacities {
-				if sc.Date.Format("2006-01-02") == dateStr && sc.TimeSlotID == slot.ID {
+				if sc.Date.In(time.UTC).Format(config.DateLayout) == dateStr && sc.TimeSlotID == slot.ID {
 					count = sc.CheckedInCount
 					break
 				}
@@ -363,4 +324,35 @@ func GetSlotHeatmap(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, result)
+}
+
+func parseDateRange(c *gin.Context, defaultStart, defaultEnd time.Time) (time.Time, time.Time, bool) {
+	start := defaultStart
+	if value := c.Query("start_date"); value != "" {
+		parsed, err := config.ParseDate(value)
+		if err != nil {
+			writeDateError(c, "开始日期格式错误，请使用 YYYY-MM-DD")
+			return time.Time{}, time.Time{}, false
+		}
+		start = parsed
+	}
+
+	end := defaultEnd
+	if value := c.Query("end_date"); value != "" {
+		parsed, err := config.ParseDate(value)
+		if err != nil {
+			writeDateError(c, "结束日期格式错误，请使用 YYYY-MM-DD")
+			return time.Time{}, time.Time{}, false
+		}
+		end = parsed
+	}
+	if end.Before(start) {
+		writeDateError(c, "结束日期不能早于开始日期")
+		return time.Time{}, time.Time{}, false
+	}
+	return start, end.AddDate(0, 0, 1), true
+}
+
+func writeDateError(c *gin.Context, message string) {
+	c.JSON(http.StatusBadRequest, gin.H{"error": message})
 }

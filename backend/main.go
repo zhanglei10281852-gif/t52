@@ -6,6 +6,7 @@ import (
 	"scenic-ticket/database"
 	"scenic-ticket/handlers"
 	"scenic-ticket/middleware"
+	"scenic-ticket/ticket"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -19,6 +20,11 @@ func main() {
 	}
 
 	r := gin.Default()
+	lifecycle := handlers.NewLifecycleHandler(ticket.NewService(
+		database.NewTicketRepository(database.DB),
+		ticket.SystemClock{},
+		ticket.RandomTicketNumberGenerator{},
+	))
 
 	r.Use(cors.New(cors.Config{
 		AllowAllOrigins:  true,
@@ -40,13 +46,13 @@ func main() {
 		auth.GET("/ticket-types", handlers.GetTicketTypes)
 		auth.GET("/gates", handlers.GetGates)
 
-		auth.POST("/tickets/sell", middleware.SellerOrAdminMiddleware(), handlers.SellTicket)
-		auth.POST("/tickets/refund", middleware.SellerOrAdminMiddleware(), handlers.RefundTicket)
+		auth.POST("/tickets/sell", middleware.SellerOrAdminMiddleware(), lifecycle.SellTicket)
+		auth.POST("/tickets/refund", middleware.SellerOrAdminMiddleware(), lifecycle.RefundTicket)
 		auth.GET("/tickets/:ticket_no", handlers.GetTicket)
 		auth.GET("/tickets", handlers.SearchTickets)
 
-		auth.POST("/check-in", handlers.CheckIn)
-		auth.POST("/check-out", handlers.CheckOut)
+		auth.POST("/check-in", lifecycle.CheckIn)
+		auth.POST("/check-out", lifecycle.CheckOut)
 		auth.GET("/in-park-count", handlers.GetInParkCount)
 		auth.GET("/check-records", handlers.GetCheckRecords)
 

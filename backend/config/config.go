@@ -2,7 +2,12 @@ package config
 
 import (
 	"os"
+	"time"
 )
+
+const DateLayout = "2006-01-02"
+
+var BusinessLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
 
 type Config struct {
 	DBHost     string
@@ -31,6 +36,28 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// DateKey stores a business calendar date as UTC midnight for compatibility
+// with existing date-only database columns.
+func DateKey(value time.Time) time.Time {
+	local := value.In(BusinessLocation)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func ParseDate(value string) (time.Time, error) {
+	parsed, err := time.Parse(DateLayout, value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, time.UTC), nil
+}
+
+// DayRange returns the actual instants covered by a business calendar date.
+func DayRange(value time.Time) (time.Time, time.Time) {
+	key := value.In(time.UTC)
+	start := time.Date(key.Year(), key.Month(), key.Day(), 0, 0, 0, 0, BusinessLocation)
+	return start, start.AddDate(0, 0, 1)
 }
 
 const (

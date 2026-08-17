@@ -25,7 +25,7 @@ const routes = [
         component: () => import("@/views/SellTicket.vue"),
         meta: {
           title: "售票管理",
-          icon: "TicketOutlined",
+          icon: "TagsOutlined",
           roles: ["admin", "seller"],
         },
       },

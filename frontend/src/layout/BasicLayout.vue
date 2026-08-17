@@ -7,7 +7,7 @@
       width="220"
     >
       <div class="logo">
-        <component :is="'TicketOutlined'" style="font-size: 24px" />
+        <component :is="'TagsOutlined'" style="font-size: 24px" />
         <span v-if="!collapsed" class="logo-text">景区票务平台</span>
       </div>
       <a-menu
@@ -25,7 +25,7 @@
         </a-menu-item>
         <a-menu-item v-if="hasSellerRole" key="/sell">
           <template #icon>
-            <component :is="'TicketOutlined'" />
+            <component :is="'TagsOutlined'" />
           </template>
           <span>售票管理</span>
         </a-menu-item>
@@ -107,7 +107,7 @@ import { useUserStore } from '@/store/user'
 import { getCurrentUser } from '@/api'
 import {
   DashboardOutlined,
-  TicketOutlined,
+  TagsOutlined,
   SearchOutlined,
   CheckCircleOutlined,
   LoginOutlined,
